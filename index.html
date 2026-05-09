@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trích Xuất Dữ Liệu Phiếu Khảo Sát</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Thêm thư viện xuất Excel SheetJS -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        /* Custom scrollbar for table */
+        .table-container::-webkit-scrollbar {
+            height: 8px;
+            width: 8px;
+        }
+        .table-container::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+            border-radius: 4px;
+        }
+        .table-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        .table-container::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex flex-col items-center">
+
+    <div class="max-w-7xl w-full bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col">
+        <!-- Header -->
+        <div class="bg-blue-600 p-6 text-white flex items-center gap-3 justify-between">
+            <div class="flex items-center gap-3">
+                <i data-lucide="file-scan" class="w-8 h-8"></i>
+                <div>
+                    <h1 class="text-2xl font-bold">Hệ Thống Trích Xuất Phiếu Khảo Sát</h1>
+                    <p class="text-blue-100 text-sm mt-1">Tự động nhận diện PDF nhiều trang và điền vào bảng dữ liệu</p>
+                </div>
+            </div>
+            
+            <!-- API Key Configuration Toggle -->
+            <button onclick="toggleApiSettings()" class="text-blue-100 hover:text-white transition-colors flex items-center gap-2 text-sm bg-blue-700/50 px-3 py-1.5 rounded-lg">
+                <i data-lucide="settings-2" class="w-4 h-4"></i>
+                Cài đặt API
+            </button>
+        </div>
+
+        <!-- API Settings Panel (Hidden by default) -->
+        <div id="apiSettingsPanel" class="hidden bg-slate-50 border-b border-gray-200 p-6">
+            <label for="customApiKey" class="block text-sm font-medium text-gray-700 mb-2">Google Gemini API Key cá nhân (Tuỳ chọn)</label>
+            <div class="flex gap-3 max-w-2xl">
+                <input type="password" id="customApiKey" placeholder="Nhập API Key của bạn (AI Studio)..." class="flex-grow text-sm border-gray-300 rounded-lg shadow-sm px-4 py-2.5 border focus:ring-blue-500 focus:border-blue-500">
+                <button onclick="saveApiKey()" class="bg-slate-800 hover:bg-slate-900 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors whitespace-nowrap">
+                    Lưu Key
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">Mẹo: Nhập Key của riêng bạn để quá trình xử lý nhanh và không bị giới hạn. Hệ thống sẽ lưu trữ cục bộ trên trình duyệt của bạn. Bỏ trống nếu muốn dùng Key mặc định của hệ thống.</p>
+        </div>
+
+        <!-- Controls Section -->
+        <div class="p-6 border-b border-gray-100 bg-gray-50 flex flex-col md:flex-row gap-4 justify-between items-center">
+            <div class="w-full md:w-1/2">
+                <label for="fileUpload" class="block text-sm font-medium text-gray-700 mb-2">Tải lên Phiếu khảo sát (Hỗ trợ PDF nhiều trang hoặc Ảnh)</label>
+                <div class="flex items-center gap-3">
+                    <input type="file" id="fileUpload" accept=".pdf, image/*" class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2.5 file:px-4
+                        file:rounded-lg file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-blue-50 file:text-blue-700
+                        hover:file:bg-blue-100 transition-colors cursor-pointer border border-gray-200 rounded-lg bg-white"
+                    />
+                </div>
+            </div>
+            
+            <div class="w-full md:w-auto flex flex-col items-end">
+                <div class="flex gap-3 w-full justify-end">
+                    <!-- Nút Xuất Excel (Ẩn mặc định) -->
+                    <button id="exportBtn" onclick="exportToExcel()" class="hidden w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-medium py-2.5 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 transition-all">
+                        <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                        Xuất Excel
+                    </button>
+                    <!-- Nút Trích Xuất -->
+                    <button id="extractBtn" onclick="handleExtract()" class="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-6 rounded-lg shadow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i>
+                        Bắt đầu trích xuất
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Message -->
+        <div id="statusMessage" class="hidden mx-6 mt-4 p-4 rounded-lg text-sm font-medium"></div>
+
+        <!-- Table Section -->
+        <div class="p-6 flex-grow">
+            <div class="table-container overflow-x-auto border border-gray-200 rounded-xl">
+                <table class="min-w-full divide-y divide-gray-200 text-sm text-left">
+                    <thead class="bg-gray-50 text-gray-700 uppercase text-xs font-semibold whitespace-nowrap">
+                        <tr>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200 text-center">STT</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200">Họ và tên</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200">Số điện thoại</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200">Trường</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200">Định hướng sau khi tốt nghiệp</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200 min-w-[200px]">Ngành muốn học/ Nước muốn đi</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200 min-w-[200px]">Công việc mong muốn trong tương lai</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200 min-w-[150px]">Ghi chú (Lý do chọn)</th>
+                            <th scope="col" class="px-4 py-3 border-r border-gray-200">Ngày nhận</th>
+                            <th scope="col" class="px-4 py-3">Email</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultBody" class="bg-white divide-y divide-gray-200">
+                        <!-- Placeholder row -->
+                        <tr id="emptyRow">
+                            <td colspan="10" class="px-6 py-12 text-center text-gray-400">
+                                <div class="flex flex-col items-center justify-center">
+                                    <i data-lucide="table-2" class="w-12 h-12 mb-3 opacity-50"></i>
+                                    <p>Chưa có dữ liệu. Hãy tải file lên và nhấn "Bắt đầu trích xuất".</p>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Canvas provides the API key in this variable as fallback
+        const defaultApiKey = ""; 
+        let rowCount = 0;
+        let globalDataArray = []; // Biến lưu trữ dữ liệu để xuất Excel
+
+        // --- CẤU HÌNH API KEY ---
+        // Tải Key cá nhân từ localStorage khi mở trang
+        window.onload = () => {
+            const savedKey = localStorage.getItem('gemini_custom_api_key');
+            if (savedKey) {
+                document.getElementById('customApiKey').value = savedKey;
+            }
+        };
+
+        function toggleApiSettings() {
+            const panel = document.getElementById('apiSettingsPanel');
+            panel.classList.toggle('hidden');
+        }
+
+        function saveApiKey() {
+            const key = document.getElementById('customApiKey').value.trim();
+            if (key) {
+                localStorage.setItem('gemini_custom_api_key', key);
+                showMessage('Đã lưu API Key cá nhân thành công!', 'success');
+            } else {
+                localStorage.removeItem('gemini_custom_api_key');
+                showMessage('Đã xoá API Key cá nhân. Sẽ sử dụng key mặc định của hệ thống.', 'info');
+            }
+            setTimeout(() => { toggleApiSettings(); }, 1500);
+        }
+
+        function getActiveApiKey() {
+            const savedKey = localStorage.getItem('gemini_custom_api_key');
+            return savedKey || defaultApiKey;
+        }
+        // -------------------------
+
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        function showMessage(msg, type = 'info') {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.classList.remove('hidden', 'bg-blue-50', 'text-blue-700', 'bg-red-50', 'text-red-700', 'bg-green-50', 'text-green-700');
+            
+            if (type === 'error') {
+                statusDiv.classList.add('bg-red-50', 'text-red-700');
+            } else if (type === 'success') {
+                statusDiv.classList.add('bg-green-50', 'text-green-700');
+            } else {
+                statusDiv.classList.add('bg-blue-50', 'text-blue-700');
+            }
+            
+            statusDiv.innerHTML = `<div class="flex items-center gap-2"><i data-lucide="info" class="w-5 h-5"></i><span>${msg}</span></div>`;
+            lucide.createIcons();
+        }
+
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            const delays = [1000, 2000, 4000, 8000, 16000];
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(`Lỗi HTTP ${response.status}: ${errorData.error?.message || 'Có lỗi xảy ra khi gọi API. Kiểm tra lại API Key.'}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    if (i === maxRetries - 1) throw error;
+                    await new Promise(res => setTimeout(res, delays[i]));
+                }
+            }
+        }
+
+        async function handleExtract() {
+            const currentApiKey = getActiveApiKey();
+            if (!currentApiKey) {
+                showMessage('Vui lòng vào Cài đặt API để nhập API Key trước khi sử dụng.', 'error');
+                return;
+            }
+
+            const fileInput = document.getElementById('fileUpload');
+            const extractBtn = document.getElementById('extractBtn');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                showMessage('Vui lòng chọn một file (PDF hoặc Hình ảnh) trước khi trích xuất.', 'error');
+                return;
+            }
+
+            try {
+                // UI Updates
+                extractBtn.disabled = true;
+                extractBtn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Đang xử lý PDF nhiều trang...`;
+                showMessage('Đang đọc file và AI đang phân tích dữ liệu, vui lòng đợi trong giây lát (file nhiều trang sẽ tốn khoảng 10-20 giây)...', 'info');
+
+                // Prepare file data
+                const base64Full = await fileToBase64(file);
+                const mimeType = file.type;
+                const base64Data = base64Full.split(',')[1];
+
+                // CẬP NHẬT PROMPT: ÉP BUỘC TRẢ VỀ CHÍNH XÁC SỐ TRANG
+                const promptText = `
+                Bạn là một chuyên gia trích xuất dữ liệu từ biểu mẫu siêu việt. 
+                Tài liệu bạn nhận được là một file PDF HOẶC HÌNH ẢNH. 
+                NẾU LÀ PDF: File này chứa RẤT NHIỀU trang (ví dụ 10 trang, 12 trang...). 
+                MỖI TRANG (HOẶC MỖI HÌNH ẢNH NẾU TẢI LÊN 1 HÌNH) LÀ MỘT PHIẾU KHẢO SÁT RIÊNG BIỆT CỦA 1 HỌC SINH KHÁC NHAU.
+
+                NHIỆM VỤ TỐI THƯỢNG:
+                1. ĐẾM số lượng trang trong file PDF (hoặc xem có mấy hình).
+                2. BẮT BUỘC trả về một mảng JSON có SỐ LƯỢNG OBJECT BẰNG ĐÚNG SỐ LƯỢNG TRANG (hoặc hình). 
+                3. Ví dụ: PDF có 12 trang, mảng kết quả PHẢI có CHÍNH XÁC 12 object. TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ TRANG NÀO, KHÔNG ĐƯỢC DỪNG LẠI GIỮA CHỪNG.
+                4. Dù phiếu đó gần như trống không, cũng phải tạo ra 1 object tương ứng cho trang đó với các trường giá trị rỗng "".
+
+                QUY TẮC MAP CỘT:
+                - hoVaTen: Lấy họ và tên. Viết hoa chữ cái đầu mỗi từ. Nếu có chữ "Ng" hoặc "Ng.", dịch thành "Nguyễn". NẾU KHÔNG CÓ TÊN NHƯNG ĐÂY LÀ MỘT TRANG MỚI, VẪN PHẢI TẠO OBJECT VÀ ĐỂ TRỐNG TRƯỜNG NÀY (TUYỆT ĐỐI KHÔNG BỎ QUA TRANG ĐÓ).
+                - soDienThoai: Lấy số điện thoại. Xóa khoảng trắng, dấu chấm, gạch ngang. Nếu nét không rõ, dùng logic đầu số Việt Nam (03, 05, 07, 08, 09) và đủ 10 số để suy luận.
+                - truong: Lấy tên trường. Sửa "Ng" hoặc "Ng." thành "Nguyễn".
+                - dinhHuong: Đọc Câu 1.
+                - nganhHocNuocNgoai: Đọc chi tiết chữ viết tay ở Câu 1 (ngành học, nước).
+                - congViec: Đọc Câu 2.
+                - email: Lấy email. Xóa khoảng trắng, chuyển chữ thường. Sửa các đuôi giống gmail thành "@gmail.com".
+                - ngayNhan: Lấy ngày hiện tại hệ thống là ${new Date().toLocaleDateString('vi-VN')}.
+
+                QUY TẮC XỬ LÝ CÂU 3 (GHI CHÚ) - CHỌN NHIỀU:
+                - Ở Câu 3, nếu chọn NHIỀU Ô, gộp tất cả các lựa chọn lại thành MỘT chuỗi duy nhất, phân cách nhau bởi ký tự xuống dòng (\\n).
+                - Nếu chỉ tích 1 ô, ghi nội dung ô đó. Nếu không tích, để rỗng "".
+                `;
+
+                // Cấu trúc JSON Schema
+                const schema = {
+                    type: "ARRAY",
+                    description: "Mảng chứa dữ liệu, MỖI OBJECT TƯƠNG ỨNG VỚI 1 TRANG PDF. Số object = số trang.",
+                    items: {
+                        type: "OBJECT",
+                        properties: {
+                            hoVaTen: { type: "STRING" },
+                            soDienThoai: { type: "STRING" },
+                            truong: { type: "STRING" },
+                            dinhHuong: { type: "STRING" },
+                            nganhHocNuocNgoai: { type: "STRING" },
+                            congViec: { type: "STRING" },
+                            ghiChu: { type: "STRING" },
+                            ngayNhan: { type: "STRING" },
+                            email: { type: "STRING" }
+                        }
+                    }
+                };
+
+                const payload = {
+                    contents: [{
+                        role: "user",
+                        parts: [
+                            { text: promptText },
+                            { inlineData: { mimeType: mimeType, data: base64Data } }
+                        ]
+                    }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: schema,
+                        maxOutputTokens: 8192 // Mở rộng dung lượng đầu ra tối đa
+                    }
+                };
+
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`;
+                
+                const result = await fetchWithRetry(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!textResponse) {
+                    throw new Error("Không nhận được dữ liệu hợp lệ từ AI. Vui lòng thử lại.");
+                }
+
+                const dataArray = JSON.parse(textResponse);
+                
+                // Lưu dữ liệu vào biến toàn cục để xuất ra Excel
+                globalDataArray = dataArray; 
+                
+                renderToTable(dataArray);
+                
+                // Hiển thị nút Xuất Excel sau khi có dữ liệu
+                document.getElementById('exportBtn').classList.remove('hidden');
+
+                showMessage(`Trích xuất thành công ${dataArray.length} phiếu! Dữ liệu đã được điền vào bảng.`, 'success');
+
+            } catch (error) {
+                console.error(error);
+                showMessage(error.message, 'error');
+            } finally {
+                extractBtn.disabled = false;
+                extractBtn.innerHTML = `<i data-lucide="sparkles" class="w-5 h-5"></i> Bắt đầu trích xuất`;
+                lucide.createIcons();
+            }
+        }
+
+        function renderToTable(dataArray) {
+            const tbody = document.getElementById('resultBody');
+            const emptyRow = document.getElementById('emptyRow');
+            
+            if (emptyRow) emptyRow.remove();
+
+            dataArray.forEach(data => {
+                rowCount++;
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 transition-colors";
+                
+                const safe = (val) => val ? val : '';
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 border-r border-gray-200 text-center font-medium text-gray-900">${rowCount}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-900 whitespace-nowrap">${safe(data.hoVaTen)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-nowrap">${safe(data.soDienThoai)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-nowrap">${safe(data.truong)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.dinhHuong)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.nganhHocNuocNgoai)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.congViec)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-pre-line">${safe(data.ghiChu)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-nowrap">${safe(data.ngayNhan)}</td>
+                    <td class="px-4 py-3 text-blue-600 whitespace-nowrap">${safe(data.email)}</td>
+                `;
+                
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- HÀM XUẤT EXCEL ---
+        function exportToExcel() {
+            if (!globalDataArray || globalDataArray.length === 0) {
+                showMessage("Không có dữ liệu để xuất!", "error");
+                return;
+            }
+
+            // Map lại dữ liệu để có header Tiếng Việt chuẩn xác
+            const excelData = globalDataArray.map((item, index) => ({
+                "STT": index + 1,
+                "Họ và tên": item.hoVaTen || "",
+                "Số điện thoại": item.soDienThoai || "",
+                "Trường": item.truong || "",
+                "Định hướng sau khi tốt nghiệp": item.dinhHuong || "",
+                "Ngành muốn học/ Nước muốn đi": item.nganhHocNuocNgoai || "",
+                "Công việc mong muốn trong tương lai": item.congViec || "",
+                "Ghi chú (Lý do chọn)": item.ghiChu || "",
+                "Ngày nhận": item.ngayNhan || "",
+                "Email": item.email || ""
+            }));
+
+            // Tạo worksheet từ mảng JSON đã định dạng
+            const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+            // Tùy chỉnh độ rộng các cột trong Excel cho đẹp mắt
+            const wscols = [
+                {wch: 5},  // STT
+                {wch: 25}, // Họ và tên
+                {wch: 15}, // Số ĐT
+                {wch: 30}, // Trường
+                {wch: 30}, // Định hướng
+                {wch: 30}, // Ngành/Nước
+                {wch: 35}, // Công việc
+                {wch: 40}, // Ghi chú (Kéo rộng vì có thể xuống dòng)
+                {wch: 15}, // Ngày nhận
+                {wch: 25}  // Email
+            ];
+            worksheet['!cols'] = wscols;
+
+            // Tạo workbook và gắn sheet vào
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "DanhSachKhaoSat");
+
+            // Kích hoạt tải file
+            XLSX.writeFile(workbook, "DanhSach_HocSinh_KhaoSat.xlsx");
+        }
+    </script>
+</body>
+</html>
