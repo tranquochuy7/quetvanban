@@ -8,6 +8,11 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Thêm thư viện xuất Excel SheetJS -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- Thêm thư viện xử lý PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body {
@@ -142,7 +147,6 @@
         let globalDataArray = []; // Biến lưu trữ dữ liệu để xuất Excel
 
         // --- CẤU HÌNH API KEY ---
-        // Tải Key cá nhân từ localStorage khi mở trang
         window.onload = () => {
             const savedKey = localStorage.getItem('gemini_custom_api_key');
             if (savedKey) {
@@ -171,7 +175,6 @@
             const savedKey = localStorage.getItem('gemini_custom_api_key');
             return savedKey || defaultApiKey;
         }
-        // -------------------------
 
         function fileToBase64(file) {
             return new Promise((resolve, reject) => {
@@ -205,7 +208,7 @@
                     const response = await fetch(url, options);
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({}));
-                        throw new Error(`Lỗi HTTP ${response.status}: ${errorData.error?.message || 'Có lỗi xảy ra khi gọi API. Kiểm tra lại API Key.'}`);
+                        throw new Error(`Lỗi HTTP ${response.status}: ${errorData.error?.message || 'Có lỗi xảy ra khi gọi API.'}`);
                     }
                     return await response.json();
                 } catch (error) {
@@ -213,6 +216,75 @@
                     await new Promise(res => setTimeout(res, delays[i]));
                 }
             }
+        }
+
+        // HÀM GỌI API CHO MỘT TRANG DUY NHẤT
+        async function extractSinglePage(base64Data, mimeType, currentApiKey) {
+            const promptText = `
+                BẠN ĐANG XEM MỘT TRANG DUY NHẤT CỦA PHIẾU KHẢO SÁT.
+                Hãy trích xuất thông tin của học sinh trên trang này thành MỘT OBJECT JSON DUY NHẤT.
+
+                QUY TẮC QUAN TRỌNG:
+                1. Dù phiếu gần như trống, VẪN PHẢI TRẢ VỀ OBJECT, các mục không có thông tin thì để rỗng "".
+                2. TUYỆT ĐỐI KHÔNG BỎ SÓT HỌ VÀ TÊN NẾU CÓ CHỮ.
+                
+                QUY TẮC MAP CỘT:
+                - hoVaTen: Lấy họ và tên. Viết hoa chữ cái đầu. (Sửa "Ng" hoặc "Ng." thành "Nguyễn").
+                - soDienThoai: Lấy số điện thoại (xoá khoảng trắng, dấu chấm).
+                - truong: Lấy tên trường. (Sửa "Ng" hoặc "Ng." thành "Nguyễn").
+                - dinhHuong: Đọc Câu 1.
+                - nganhHocNuocNgoai: Đọc chi tiết chữ viết tay ở Câu 1.
+                - congViec: Đọc Câu 2.
+                - email: Lấy email. Chuyển chữ thường, sửa các lỗi thành đuôi "@gmail.com".
+                - ngayNhan: Lấy ngày hiện tại là ${new Date().toLocaleDateString('vi-VN')}.
+
+                QUY TẮC XỬ LÝ CÂU 3 (GHI CHÚ):
+                - Nếu chọn NHIỀU Ô, gộp tất cả lại thành MỘT chuỗi, phân cách nhau bởi " | ". (VD: Sở thích cá nhân | Tham khảo bạn bè).
+                - Tuyệt đối không dùng ký tự xuống dòng (\\n) trong JSON.
+            `;
+
+            const schema = {
+                type: "OBJECT", // CHỈ YÊU CẦU 1 OBJECT (Giải quyết triệt để lỗi độ dài JSON)
+                properties: {
+                    hoVaTen: { type: "STRING" },
+                    soDienThoai: { type: "STRING" },
+                    truong: { type: "STRING" },
+                    dinhHuong: { type: "STRING" },
+                    nganhHocNuocNgoai: { type: "STRING" },
+                    congViec: { type: "STRING" },
+                    ghiChu: { type: "STRING" },
+                    ngayNhan: { type: "STRING" },
+                    email: { type: "STRING" }
+                }
+            };
+
+            const payload = {
+                contents: [{
+                    role: "user",
+                    parts: [
+                        { text: promptText },
+                        { inlineData: { mimeType: mimeType, data: base64Data } }
+                    ]
+                }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: schema
+                }
+            };
+
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`;
+            
+            const result = await fetchWithRetry(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!textResponse) throw new Error("Không nhận được dữ liệu hợp lệ từ AI.");
+
+            let cleanedText = textResponse.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+            return JSON.parse(cleanedText);
         }
 
         async function handleExtract() {
@@ -224,114 +296,91 @@
 
             const fileInput = document.getElementById('fileUpload');
             const extractBtn = document.getElementById('extractBtn');
+            const exportBtn = document.getElementById('exportBtn');
             const file = fileInput.files[0];
 
             if (!file) {
-                showMessage('Vui lòng chọn một file (PDF hoặc Hình ảnh) trước khi trích xuất.', 'error');
+                showMessage('Vui lòng chọn một file (PDF hoặc Hình ảnh).', 'error');
                 return;
             }
 
             try {
                 // UI Updates
                 extractBtn.disabled = true;
-                extractBtn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Đang xử lý PDF nhiều trang...`;
-                showMessage('Đang đọc file và AI đang phân tích dữ liệu, vui lòng đợi trong giây lát (file nhiều trang sẽ tốn khoảng 10-20 giây)...', 'info');
+                exportBtn.classList.add('hidden');
+                
+                // Clear table and data
+                globalDataArray = [];
+                rowCount = 0;
+                const tbody = document.getElementById('resultBody');
+                tbody.innerHTML = `<tr id="emptyRow">
+                    <td colspan="10" class="px-6 py-12 text-center text-gray-400">
+                        <div class="flex flex-col items-center justify-center">
+                            <svg class="animate-spin h-8 w-8 mb-3 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            <p>Đang chuẩn bị dữ liệu...</p>
+                        </div>
+                    </td>
+                </tr>`;
 
-                // Prepare file data
-                const base64Full = await fileToBase64(file);
-                const mimeType = file.type;
-                const base64Data = base64Full.split(',')[1];
+                // XỬ LÝ THEO LOẠI FILE (PDF nhiều trang vs Ảnh)
+                if (file.type === "application/pdf") {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    const numPages = pdf.numPages;
 
-                // CẬP NHẬT PROMPT: ÉP BUỘC TRẢ VỀ CHÍNH XÁC SỐ TRANG
-                const promptText = `
-                Bạn là một chuyên gia trích xuất dữ liệu từ biểu mẫu siêu việt. 
-                Tài liệu bạn nhận được là một file PDF HOẶC HÌNH ẢNH. 
-                NẾU LÀ PDF: File này chứa RẤT NHIỀU trang (ví dụ 10 trang, 12 trang...). 
-                MỖI TRANG (HOẶC MỖI HÌNH ẢNH NẾU TẢI LÊN 1 HÌNH) LÀ MỘT PHIẾU KHẢO SÁT RIÊNG BIỆT CỦA 1 HỌC SINH KHÁC NHAU.
+                    extractBtn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> Đang xử lý ${numPages} trang...`;
+                    showMessage(`Đã tải PDF gồm ${numPages} trang. Hệ thống đang tiến hành xử lý từng trang một...`, 'info');
 
-                NHIỆM VỤ TỐI THƯỢNG:
-                1. ĐẾM số lượng trang trong file PDF (hoặc xem có mấy hình).
-                2. BẮT BUỘC trả về một mảng JSON có SỐ LƯỢNG OBJECT BẰNG ĐÚNG SỐ LƯỢNG TRANG (hoặc hình). 
-                3. Ví dụ: PDF có 12 trang, mảng kết quả PHẢI có CHÍNH XÁC 12 object. TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ TRANG NÀO, KHÔNG ĐƯỢC DỪNG LẠI GIỮA CHỪNG.
-                4. Dù phiếu đó gần như trống không, cũng phải tạo ra 1 object tương ứng cho trang đó với các trường giá trị rỗng "".
+                    for (let i = 1; i <= numPages; i++) {
+                        showMessage(`Tiến độ: Đang xử lý trang ${i}/${numPages}...`, 'info');
+                        
+                        // Chuyển PDF page thành Ảnh Canvas
+                        const page = await pdf.getPage(i);
+                        const viewport = page.getViewport({ scale: 1.5 }); // Độ phân giải tốt
+                        const canvas = document.createElement('canvas');
+                        canvas.height = viewport.height;
+                        canvas.width = viewport.width;
+                        const context = canvas.getContext('2d');
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        
+                        // Tách base64
+                        const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+                        
+                        // Gọi AI xử lý 1 trang này
+                        const singlePageData = await extractSinglePage(base64Data, 'image/jpeg', currentApiKey);
+                        globalDataArray.push(singlePageData);
+                        
+                        // Hiển thị ngay lên bảng
+                        renderToTable([singlePageData]);
 
-                QUY TẮC MAP CỘT:
-                - hoVaTen: Lấy họ và tên. Viết hoa chữ cái đầu mỗi từ. Nếu có chữ "Ng" hoặc "Ng.", dịch thành "Nguyễn". NẾU KHÔNG CÓ TÊN NHƯNG ĐÂY LÀ MỘT TRANG MỚI, VẪN PHẢI TẠO OBJECT VÀ ĐỂ TRỐNG TRƯỜNG NÀY (TUYỆT ĐỐI KHÔNG BỎ QUA TRANG ĐÓ).
-                - soDienThoai: Lấy số điện thoại. Xóa khoảng trắng, dấu chấm, gạch ngang. Nếu nét không rõ, dùng logic đầu số Việt Nam (03, 05, 07, 08, 09) và đủ 10 số để suy luận.
-                - truong: Lấy tên trường. Sửa "Ng" hoặc "Ng." thành "Nguyễn".
-                - dinhHuong: Đọc Câu 1.
-                - nganhHocNuocNgoai: Đọc chi tiết chữ viết tay ở Câu 1 (ngành học, nước).
-                - congViec: Đọc Câu 2.
-                - email: Lấy email. Xóa khoảng trắng, chuyển chữ thường. Sửa các đuôi giống gmail thành "@gmail.com".
-                - ngayNhan: Lấy ngày hiện tại hệ thống là ${new Date().toLocaleDateString('vi-VN')}.
-
-                QUY TẮC XỬ LÝ CÂU 3 (GHI CHÚ) - CHỌN NHIỀU:
-                - Ở Câu 3, nếu chọn NHIỀU Ô, gộp tất cả các lựa chọn lại thành MỘT chuỗi duy nhất, phân cách nhau bởi ký tự xuống dòng (\\n).
-                - Nếu chỉ tích 1 ô, ghi nội dung ô đó. Nếu không tích, để rỗng "".
-                `;
-
-                // Cấu trúc JSON Schema
-                const schema = {
-                    type: "ARRAY",
-                    description: "Mảng chứa dữ liệu, MỖI OBJECT TƯƠNG ỨNG VỚI 1 TRANG PDF. Số object = số trang.",
-                    items: {
-                        type: "OBJECT",
-                        properties: {
-                            hoVaTen: { type: "STRING" },
-                            soDienThoai: { type: "STRING" },
-                            truong: { type: "STRING" },
-                            dinhHuong: { type: "STRING" },
-                            nganhHocNuocNgoai: { type: "STRING" },
-                            congViec: { type: "STRING" },
-                            ghiChu: { type: "STRING" },
-                            ngayNhan: { type: "STRING" },
-                            email: { type: "STRING" }
+                        // Delay nhỏ (2.5 giây) giữa các trang để tránh bị Google block do spam request
+                        if (i < numPages) {
+                            await new Promise(resolve => setTimeout(resolve, 2500));
                         }
                     }
-                };
 
-                const payload = {
-                    contents: [{
-                        role: "user",
-                        parts: [
-                            { text: promptText },
-                            { inlineData: { mimeType: mimeType, data: base64Data } }
-                        ]
-                    }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: schema,
-                        maxOutputTokens: 8192 // Mở rộng dung lượng đầu ra tối đa
-                    }
-                };
-
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`;
-                
-                const result = await fetchWithRetry(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!textResponse) {
-                    throw new Error("Không nhận được dữ liệu hợp lệ từ AI. Vui lòng thử lại.");
+                } else {
+                    // Nếu tải lên file Hình ảnh bình thường
+                    extractBtn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> Đang xử lý...`;
+                    showMessage('Đang đọc hình ảnh, vui lòng đợi...', 'info');
+                    
+                    const base64Full = await fileToBase64(file);
+                    const base64Data = base64Full.split(',')[1];
+                    const singlePageData = await extractSinglePage(base64Data, file.type, currentApiKey);
+                    
+                    globalDataArray.push(singlePageData);
+                    renderToTable([singlePageData]);
                 }
-
-                const dataArray = JSON.parse(textResponse);
-                
-                // Lưu dữ liệu vào biến toàn cục để xuất ra Excel
-                globalDataArray = dataArray; 
-                
-                renderToTable(dataArray);
                 
                 // Hiển thị nút Xuất Excel sau khi có dữ liệu
-                document.getElementById('exportBtn').classList.remove('hidden');
+                if (globalDataArray.length > 0) {
+                    exportBtn.classList.remove('hidden');
+                }
 
-                showMessage(`Trích xuất thành công ${dataArray.length} phiếu! Dữ liệu đã được điền vào bảng.`, 'success');
+                showMessage(`Hoàn tất! Đã trích xuất thành công ${globalDataArray.length} phiếu.`, 'success');
 
             } catch (error) {
-                console.error(error);
+                console.error("Lỗi chính:", error);
                 showMessage(error.message, 'error');
             } finally {
                 extractBtn.disabled = false;
@@ -352,6 +401,8 @@
                 tr.className = "hover:bg-gray-50 transition-colors";
                 
                 const safe = (val) => val ? val : '';
+                // Xử lý ký tự phân cách thành xuống dòng HTML
+                const formatGhiChu = safe(data.ghiChu).replace(/ \| /g, '\n').replace(/\|/g, '\n');
 
                 tr.innerHTML = `
                     <td class="px-4 py-3 border-r border-gray-200 text-center font-medium text-gray-900">${rowCount}</td>
@@ -361,7 +412,7 @@
                     <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.dinhHuong)}</td>
                     <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.nganhHocNuocNgoai)}</td>
                     <td class="px-4 py-3 border-r border-gray-200 text-gray-700">${safe(data.congViec)}</td>
-                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-pre-line">${safe(data.ghiChu)}</td>
+                    <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-pre-line">${formatGhiChu}</td>
                     <td class="px-4 py-3 border-r border-gray-200 text-gray-700 whitespace-nowrap">${safe(data.ngayNhan)}</td>
                     <td class="px-4 py-3 text-blue-600 whitespace-nowrap">${safe(data.email)}</td>
                 `;
@@ -378,18 +429,21 @@
             }
 
             // Map lại dữ liệu để có header Tiếng Việt chuẩn xác
-            const excelData = globalDataArray.map((item, index) => ({
-                "STT": index + 1,
-                "Họ và tên": item.hoVaTen || "",
-                "Số điện thoại": item.soDienThoai || "",
-                "Trường": item.truong || "",
-                "Định hướng sau khi tốt nghiệp": item.dinhHuong || "",
-                "Ngành muốn học/ Nước muốn đi": item.nganhHocNuocNgoai || "",
-                "Công việc mong muốn trong tương lai": item.congViec || "",
-                "Ghi chú (Lý do chọn)": item.ghiChu || "",
-                "Ngày nhận": item.ngayNhan || "",
-                "Email": item.email || ""
-            }));
+            const excelData = globalDataArray.map((item, index) => {
+                const formatGhiChu = (item.ghiChu || "").replace(/ \| /g, '\n').replace(/\|/g, '\n');
+                return {
+                    "STT": index + 1,
+                    "Họ và tên": item.hoVaTen || "",
+                    "Số điện thoại": item.soDienThoai || "",
+                    "Trường": item.truong || "",
+                    "Định hướng sau khi tốt nghiệp": item.dinhHuong || "",
+                    "Ngành muốn học/ Nước muốn đi": item.nganhHocNuocNgoai || "",
+                    "Công việc mong muốn trong tương lai": item.congViec || "",
+                    "Ghi chú (Lý do chọn)": formatGhiChu,
+                    "Ngày nhận": item.ngayNhan || "",
+                    "Email": item.email || ""
+                };
+            });
 
             // Tạo worksheet từ mảng JSON đã định dạng
             const worksheet = XLSX.utils.json_to_sheet(excelData);
